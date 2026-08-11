@@ -129,6 +129,7 @@
       background: #fff; color: var(--text);
       border: 1px solid #e8e8e8; border-bottom-left-radius: 4px;
     }
+    .vobc-msg-row.bot .vobc-bubble-text a { color: var(--navy); text-decoration: underline; word-break: break-all; }
     .vobc-msg-row.user .vobc-bubble-text {
       background: var(--navy); color: #fff; border-bottom-right-radius: 4px;
     }
@@ -762,11 +763,16 @@
       .replace(/&/g, '&amp;').replace(/</g, '&lt;')
       .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
   }
+  function linkify(escapedText) {
+    return escapedText.replace(/(https?:\/\/[^\s<]+)/g, function(url) {
+      return '<a href="' + url + '" target="_blank" rel="noopener noreferrer">' + url + '</a>';
+    });
+  }
   function appendBot(text) {
     var row = document.createElement('div');
     row.className = 'vobc-msg-row bot';
     row.innerHTML = '<div class="vobc-avatar">V</div>' +
-      '<div class="vobc-bubble-text">' + escHtml(text).replace(/\n/g, '<br>') + '</div>';
+      '<div class="vobc-bubble-text">' + linkify(escHtml(text)).replace(/\n/g, '<br>') + '</div>';
     msgList.insertBefore(row, typingEl);
     scrollBottom();
   }
