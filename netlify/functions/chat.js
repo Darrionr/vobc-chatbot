@@ -14,11 +14,26 @@ const CACHE_TTL_MS = 30 * 60 * 1000; // 30 minutes
 
 var _pageCache = { text: '', ts: 0 };
 
+function resolveUrl(href) {
+  if (/^https?:\/\//i.test(href)) return href;
+  if (href.indexOf('//') === 0) return 'https:' + href;
+  if (href.indexOf('/') === 0) return 'https://vobiblecollege.org' + href;
+  return 'https://vobiblecollege.org/' + href;
+}
+
 function stripHtml(html) {
   return html
     .replace(/<script[\s\S]*?<\/script>/gi, ' ')
     .replace(/<style[\s\S]*?<\/style>/gi, ' ')
     .replace(/<!--[\s\S]*?-->/g, ' ')
+    // Preserve link destinations as "link text [URL]" before stripping tags, so the
+    // model can cite the exact page/section a live-fetched answer came from, not just
+    // its text — otherwise every href gets thrown away by the generic tag-strip below.
+    .replace(/<a\s+[^>]*href=["']([^"'#][^"']*)["'][^>]*>([\s\S]*?)<\/a>/gi, function (m, href, inner) {
+      var linkText = inner.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+      if (!linkText) return '';
+      return linkText + ' [' + resolveUrl(href) + ']';
+    })
     .replace(/<[^>]+>/g, ' ')
     .replace(/&nbsp;/g, ' ')
     .replace(/&amp;/g, '&')
@@ -107,7 +122,10 @@ exports.handler = async (event) => {
         var sysIndex = messages.findIndex(function (m) { return m.role === 'system'; });
         var note = '\n\nLIVE WEBSITE CONTEXT (fetched just now from vobiblecollege.org). ' +
           'If the answer to the visitor\'s question appears anywhere in this section, use it — ' +
-          'do not say you don\'t have the information if it is covered here:\n\n' + liveContext;
+          'do not say you don\'t have the information if it is covered here. Links appear as ' +
+          '"link text [URL]" — when your answer points the visitor to a specific page or resource ' +
+          'found here, include its exact [URL] in your reply so they can click straight to it, ' +
+          'instead of just saying "vobiblecollege.org" or describing where to look:\n\n' + liveContext;
         if (sysIndex !== -1) {
           messages[sysIndex] = { role: 'system', content: messages[sysIndex].content + note };
         } else {
