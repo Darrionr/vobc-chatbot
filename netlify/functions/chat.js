@@ -276,9 +276,15 @@ exports.handler = async (event) => {
         var note = '\n\nLIVE WEBSITE CONTEXT (fetched just now from vobiblecollege.org). ' +
           'If the answer to the visitor\'s question appears anywhere in this section, use it — ' +
           'do not say you don\'t have the information if it is covered here. Links appear as ' +
-          '"link text [URL]" — when your answer points the visitor to a specific page or resource ' +
-          'found here, include its exact [URL] in your reply so they can click straight to it, ' +
-          'instead of just saying "vobiblecollege.org" or describing where to look:\n\n' + liveContext;
+          '"link text [URL]". HARD RULE, no exceptions: whenever your answer refers to a specific ' +
+          'page, form, document, or resource — including things you found here AND things described ' +
+          'only by name in your core instructions above (course schedules, transcript requests, the ' +
+          'minister\'s license document, etc.) — you must include a real clickable [URL] for it in ' +
+          'your reply. Search this section for the exact URL first. Never write phrases like "on the ' +
+          'student page," "visit vobiblecollege.org," or "check the website" without an actual URL ' +
+          'attached to them — that is treated as a wrong answer. If you truly cannot find a more ' +
+          'specific URL anywhere in this context, default to https://vobiblecollege.org/student-page ' +
+          'rather than describing the location in words only:\n\n' + liveContext;
         if (sysIndex !== -1) {
           messages[sysIndex] = { role: 'system', content: messages[sysIndex].content + note };
         } else {

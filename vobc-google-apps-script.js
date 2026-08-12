@@ -42,21 +42,20 @@ function doPost(e) {
         data.lastQuestion || ''
       ]);
 
-      // Send email notification for new leads
-      var adminEmail = Session.getActiveUser().getEmail();
-      if (adminEmail) {
-        MailApp.sendEmail({
-          to:      adminEmail,
-          subject: 'New VOBC Chatbot Lead: ' + (data.name || 'Unknown'),
-          body:    'A new lead was submitted through the VOBC chatbot.\n\n' +
-                   'Name:          ' + (data.name  || '') + '\n' +
-                   'Email:         ' + (data.email || '') + '\n' +
-                   'Phone:         ' + (data.phone || '') + '\n' +
-                   'Language:      ' + (data.lang  || 'en') + '\n' +
-                   'Page:          ' + (data.page  || '') + '\n' +
-                   'Last Question: ' + (data.lastQuestion || '') + '\n'
-        });
-      }
+      // Send email notification for new leads — fixed recipients, not tied to whichever
+      // Google account this script happens to be deployed under.
+      MailApp.sendEmail({
+        to:      'darrionr@victoryoutreach.org',
+        cc:      'Info@vobiblecollege.org',
+        subject: 'New VOBC Chatbot Lead: ' + (data.name || 'Unknown'),
+        body:    'A new lead was submitted through the VOBC chatbot.\n\n' +
+                 'Name:          ' + (data.name  || '') + '\n' +
+                 'Email:         ' + (data.email || '') + '\n' +
+                 'Phone:         ' + (data.phone || '') + '\n' +
+                 'Language:      ' + (data.lang  || 'en') + '\n' +
+                 'Page:          ' + (data.page  || '') + '\n' +
+                 'Last Question: ' + (data.lastQuestion || '') + '\n'
+      });
     }
 
     if (data.type === 'conversation') {
