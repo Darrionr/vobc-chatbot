@@ -311,18 +311,22 @@ exports.handler = async (event) => {
     return { statusCode: 400, headers: corsHeaders, body: JSON.stringify({ error: 'Invalid JSON body' }) };
   }
 
-  var messages = Array.isArray(payload.messages) ? payload.messages.slice() : [];
+  var rawMessages = Array.isArray(payload.messages) ? payload.messages.slice() : [];
+  var sysIndex = rawMessages.findIndex(function (m) { return m.role === 'system'; });
+  var baseSystemContent = sysIndex !== -1 ? (rawMessages[sysIndex].content || '') : '';
+  var history = rawMessages.filter(function (m, i) { return i !== sysIndex; });
+
   var lastUserMsg = '';
-  for (var i = messages.length - 1; i >= 0; i--) {
-    if (messages[i].role === 'user') { lastUserMsg = messages[i].content || ''; break; }
+  for (var i = history.length - 1; i >= 0; i--) {
+    if (history[i].role === 'user') { lastUserMsg = history[i].content || ''; break; }
   }
 
+  var liveNote = '';
   if (lastUserMsg) {
     try {
       var liveContext = await getLiveWebsiteContext(lastUserMsg);
       if (liveContext) {
-        var sysIndex = messages.findIndex(function (m) { return m.role === 'system'; });
-        var note = '\n\nLIVE WEBSITE CONTEXT (fetched just now from vobiblecollege.org). ' +
+        liveNote = '\n\nLIVE WEBSITE CONTEXT (fetched just now from vobiblecollege.org). ' +
           'If the answer to the visitor\'s question appears anywhere in this section, use it — ' +
           'do not say you don\'t have the information if it is covered here. Links appear as ' +
           '"link text [URL]".\n\n' +
@@ -341,11 +345,6 @@ exports.handler = async (event) => {
           '3. When you DO have a specific page or resource from your core instructions or this live ' +
           'context, include its real URL so the visitor can click straight to it — but a correct ' +
           'answer with no link is always better than a wrong answer with an invented one:\n\n' + liveContext;
-        if (sysIndex !== -1) {
-          messages[sysIndex] = { role: 'system', content: messages[sysIndex].content + note };
-        } else {
-          messages.unshift({ role: 'system', content: note.trim() });
-        }
       }
     } catch (e) {
       // Live lookup is best-effort; fall back to the static knowledge base silently.
@@ -361,19 +360,46 @@ exports.handler = async (event) => {
     };
   }
 
-  var response = await fetch(GROQ_URL, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': 'Bearer ' + API_KEY
-    },
-    body: JSON.stringify({
-      model: payload.model || 'llama-3.1-8b-instant',
-      max_tokens: payload.max_tokens || 600,
-      messages: messages
-    })
-  });
-  var data = await response.json();
+  var model = payload.model || 'llama-3.1-8b-instant';
+  var maxTokens = payload.max_tokens || 600;
+
+  function buildMessages(includeLive, historyLimit) {
+    var sysContent = baseSystemContent + (includeLive ? liveNote : '');
+    var hist = historyLimit == null ? history : history.slice(Math.max(0, history.length - historyLimit));
+    return [{ role: 'system', content: sysContent }].concat(hist);
+  }
+
+  // Self-healing against size/rate-limit errors (the model's TPM budget is tight enough
+  // that a long back-and-forth conversation, or a question that pulls in a lot of live
+  // context, can occasionally still exceed it). Rather than surface "having trouble
+  // connecting" to a visitor, automatically retry with progressively less context — full
+  // live context is nice-to-have, but the core knowledge base and the visitor's actual
+  // question are what must never get dropped.
+  var attemptPlans = [
+    { includeLive: true,  historyLimit: null },
+    { includeLive: true,  historyLimit: 6 },
+    { includeLive: false, historyLimit: 6 },
+    { includeLive: false, historyLimit: 1 }
+  ];
+
+  var response, data;
+  for (var p = 0; p < attemptPlans.length; p++) {
+    var plan = attemptPlans[p];
+    response = await fetch(GROQ_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer ' + API_KEY
+      },
+      body: JSON.stringify({
+        model: model,
+        max_tokens: maxTokens,
+        messages: buildMessages(plan.includeLive, plan.historyLimit)
+      })
+    });
+    if (response.ok) { data = await response.json(); break; }
+    data = await response.json().catch(function () { return null; });
+  }
 
   // Instructions alone aren't reliable enough to stop this small/fast model from
   // occasionally inventing a plausible-looking but fake URL. As a real backstop (not just
