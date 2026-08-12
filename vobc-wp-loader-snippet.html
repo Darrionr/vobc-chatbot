@@ -15,8 +15,12 @@
 (function () {
   var IFRAME_SRC = 'https://vobc-chatbot.netlify.app/vobc-chatbot.html';
 
+  // The widget's own CSS has a mobile breakpoint at max-width:480px that switches its
+  // chat window to a full-width stretched layout. OPEN_DESKTOP must stay comfortably
+  // above that, or the widget's internal CSS mistakes this iframe for a mobile screen
+  // even on desktop and stretches the window edge-to-edge.
   var CLOSED   = { width: '300px', height: '160px' };
-  var OPEN_DESKTOP = { width: '450px', height: '660px' };
+  var OPEN_DESKTOP = { width: '500px', height: '660px' };
   var OPEN_MOBILE  = { width: '100vw', height: '600px' };
 
   var iframe = document.createElement('iframe');
