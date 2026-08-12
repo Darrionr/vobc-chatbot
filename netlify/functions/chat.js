@@ -77,6 +77,67 @@ async function getStudentPageText() {
   return _pageCache.text;
 }
 
+function isSearchableContentUrl(url) {
+  if (!/^https:\/\/vobiblecollege\.org\//i.test(url)) return false; // same site only
+  if (/\/\?s=/i.test(url)) return false;                             // not the search page itself
+  if (/\/(wp-login|wp-admin|feed|cdn-cgi)\b/i.test(url)) return false;
+  if (/wp-content\/uploads/i.test(url)) return false;                // PDFs/images, not HTML pages
+  if (/^https:\/\/vobiblecollege\.org\/(category|tag|author)\//i.test(url)) return false;
+  return true;
+}
+
+// The site's theme renders every genuine search-result entry as a linked title
+// immediately followed by a "by <Author> | <Date>" byline — sitewide nav links never
+// have that byline right after them. That byline is a far more reliable signal for
+// "this is a real result" than just collecting every link on the page (which mostly
+// picks up the header/footer nav that's identical on every page, search or not).
+function extractResultLinks(html) {
+  var results = [];
+  var re = /<a\s+[^>]*href=["']([^"'#][^"']*)["'][^>]*>([\s\S]{1,150}?)<\/a>/gi;
+  var m;
+  while ((m = re.exec(html)) !== null) {
+    var url = resolveUrl(m[1]).split('#')[0];
+    var afterPlain = html
+      .slice(m.index + m[0].length, m.index + m[0].length + 200)
+      .replace(/<[^>]+>/g, ' ')
+      .replace(/\s+/g, ' ');
+    if (/^\s*by\s+[\w .]+\s*\|/i.test(afterPlain)) {
+      results.push(url);
+    }
+  }
+  return results;
+}
+
+var MAX_SEARCH_PAGES = 4;
+
+// Runs the visitor's question through the site's own search, then fetches the FULL text of
+// every distinct matching page (in parallel, not one-by-one) — not just the short excerpt
+// the search-results listing shows. This is what lets the bot draw on the whole site for a
+// given question, not just whatever's on the Student Page.
+async function getSearchMatchedPages(question) {
+  var searchHtml = await rawFetchWithTimeout(SITE_SEARCH_URL + encodeURIComponent(question));
+  if (!searchHtml) return { snippet: '', pages: [] };
+
+  var snippet = stripHtml(searchHtml).slice(0, 1500);
+
+  var seen = {};
+  var candidateUrls = [];
+  extractResultLinks(searchHtml).forEach(function (url) {
+    if (isSearchableContentUrl(url) && !seen[url]) {
+      seen[url] = true;
+      candidateUrls.push(url);
+    }
+  });
+
+  var topUrls = candidateUrls.slice(0, MAX_SEARCH_PAGES);
+  var fetched = await Promise.all(topUrls.map(async function (url) {
+    var text = await fetchWithTimeout(url);
+    return text ? { url: url, text: text.slice(0, 2000) } : null;
+  }));
+
+  return { snippet: snippet, pages: fetched.filter(Boolean) };
+}
+
 // Minimal RFC 4180 CSV parser — handles quoted fields containing commas,
 // newlines, and escaped ("") quotes, which the FAQ sheet's answer column has.
 function parseCsv(text) {
@@ -145,11 +206,11 @@ async function getLiveWebsiteContext(question) {
   var results = await Promise.all([
     getFaqText(),
     getStudentPageText(),
-    fetchWithTimeout(SITE_SEARCH_URL + encodeURIComponent(question))
+    getSearchMatchedPages(question)
   ]);
-  var faqText        = results[0];
-  var studentPageText = results[1];
-  var searchText      = results[2].slice(0, 2500);
+  var faqText         = results[0];
+  var studentPageText  = results[1];
+  var searchResult     = results[2];
 
   var context = '';
   if (faqText) {
@@ -165,8 +226,14 @@ async function getLiveWebsiteContext(question) {
   if (studentPageText) {
     context += 'LIVE CONTENT FROM vobiblecollege.org/student-page:\n' + studentPageText + '\n\n';
   }
-  if (searchText) {
-    context += 'LIVE SEARCH RESULTS FROM vobiblecollege.org FOR "' + question + '":\n' + searchText + '\n\n';
+  if (searchResult.pages.length > 0) {
+    context += 'FULL CONTENT OF PAGES MATCHING THE VISITOR\'S QUESTION (found by searching all of ' +
+      'vobiblecollege.org just now, not limited to the student page):\n\n';
+    searchResult.pages.forEach(function (p) {
+      context += '--- Page: ' + p.url + ' ---\n' + p.text + '\n\n';
+    });
+  } else if (searchResult.snippet) {
+    context += 'LIVE SEARCH RESULTS FROM vobiblecollege.org FOR "' + question + '":\n' + searchResult.snippet + '\n\n';
   }
   return context;
 }
