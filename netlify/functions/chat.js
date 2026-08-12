@@ -242,6 +242,54 @@ async function getLiveWebsiteContext(question) {
   return context;
 }
 
+var LINK_CHECK_TIMEOUT_MS = 3000;
+
+function extractUrls(text) {
+  var matches = text.match(/https?:\/\/[^\s\)\]}"'<>]+/g) || [];
+  // Trim trailing punctuation a sentence might leave attached to the URL (e.g. "...org/page.")
+  return matches.map(function (u) { return u.replace(/[.,;:!?]+$/, ''); });
+}
+
+async function urlReallyExists(url) {
+  var controller = new AbortController();
+  var timer = setTimeout(function () { controller.abort(); }, LINK_CHECK_TIMEOUT_MS);
+  try {
+    var res = await fetch(url, {
+      method: 'GET',
+      redirect: 'follow',
+      signal: controller.signal,
+      headers: { 'User-Agent': 'VOBC-Chatbot/1.0 (+https://vobiblecollege.org)' }
+    });
+    return res.ok;
+  } catch (e) {
+    return false; // unreachable/timed out — treat as not existing rather than risk a bad link
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// Checks every URL the model actually put in its reply and removes any that don't
+// really resolve, so a fabricated link can never reach a visitor even if the model
+// ignored the anti-fabrication instructions in the prompt.
+async function stripFabricatedLinks(replyText) {
+  var urls = extractUrls(replyText);
+  if (urls.length === 0) return replyText;
+
+  var unique = urls.filter(function (u, i) { return urls.indexOf(u) === i; });
+  var checks = await Promise.all(unique.map(async function (u) {
+    return { url: u, ok: await urlReallyExists(u) };
+  }));
+
+  var result = replyText;
+  checks.forEach(function (c) {
+    if (!c.ok) {
+      var escaped = c.url.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      result = result.replace(new RegExp(escaped, 'g'), '');
+    }
+  });
+  return result.replace(/ {2,}/g, ' ').replace(/ ([.,!?])/g, '$1');
+}
+
 exports.handler = async (event) => {
   var corsHeaders = {
     'Access-Control-Allow-Origin': '*',
@@ -326,6 +374,21 @@ exports.handler = async (event) => {
     })
   });
   var data = await response.json();
+
+  // Instructions alone aren't reliable enough to stop this small/fast model from
+  // occasionally inventing a plausible-looking but fake URL. As a real backstop (not just
+  // a prompt rule), verify every URL in the actual reply and strip out any that don't
+  // really exist before it ever reaches a visitor.
+  try {
+    var replyText = data && data.choices && data.choices[0] && data.choices[0].message &&
+      data.choices[0].message.content;
+    if (replyText) {
+      data.choices[0].message.content = await stripFabricatedLinks(replyText);
+    }
+  } catch (e) {
+    // If verification itself fails for any reason, fall back to the unmodified reply
+    // rather than breaking the response.
+  }
 
   return {
     statusCode: response.status,
