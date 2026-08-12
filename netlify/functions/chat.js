@@ -110,18 +110,31 @@ function parseCsv(text) {
   return rows;
 }
 
+// Matches "<Month> <day>" (e.g. "January 19th", "December 20th") — used to drop any FAQ
+// row containing a specific calendar date, since the sheet's dates are unreliable/stale
+// but its policy/procedure answers are still good. Dates should only ever come from the
+// verified QUARTER START DATES section of the core system prompt, never this sheet.
+// No trailing \b: "19th" has no word boundary between the digit and "th", so requiring
+// one there would silently fail to match ordinal-suffixed dates.
+var DATE_PATTERN = /\b(January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2}/i;
+
 async function getFaqText() {
   var now = Date.now();
   if (_faqCache.text && (now - _faqCache.ts) < CACHE_TTL_MS) return _faqCache.text;
   var csv = await rawFetchWithTimeout(FAQ_CSV_URL);
   if (!csv) return _faqCache.text; // keep last known-good copy rather than dropping it on a transient failure
   var rows = parseCsv(csv);
+  // Find the real header row by content ("Question" in column 1) instead of assuming a fixed
+  // row index — the sheet has a title row above its header, and that offset could change.
+  var headerIdx = rows.findIndex(function (r) { return (r[1] || '').trim().toLowerCase() === 'question'; });
+  var startAt = headerIdx === -1 ? 0 : headerIdx + 1;
   var pairs = [];
-  // Row 0 is the header (blank, Question, Answer, Comments) — columns 1 and 2 are Question/Answer.
-  for (var r = 1; r < rows.length; r++) {
+  for (var r = startAt; r < rows.length; r++) {
     var question = (rows[r][1] || '').replace(/\s+/g, ' ').trim();
     var answer   = (rows[r][2] || '').replace(/\s+/g, ' ').trim();
-    if (question && answer) pairs.push('Q: ' + question + '\nA: ' + answer);
+    if (!question || !answer) continue;
+    if (DATE_PATTERN.test(question) || DATE_PATTERN.test(answer)) continue;
+    pairs.push('Q: ' + question + '\nA: ' + answer);
   }
   var text = pairs.join('\n\n');
   if (text) _faqCache = { text: text.slice(0, 8000), ts: now };
@@ -140,8 +153,14 @@ async function getLiveWebsiteContext(question) {
 
   var context = '';
   if (faqText) {
-    context += 'OFFICIAL VOBC FAQ (staff-maintained — treat as the most authoritative source, ' +
-      'overriding other context below if they conflict):\n' + faqText + '\n\n';
+    context += 'OFFICIAL VOBC FAQ (staff-maintained). Use it for policy and procedure answers ' +
+      '(refunds, enrollment steps, transcripts, etc.). Two rules: ' +
+      '(1) Ignore any specific calendar dates in this FAQ — quarter start dates, enrollment-open ' +
+      'dates, and deadlines here may be outdated. For any date, always use the dates given in your ' +
+      'core system instructions instead, never a date from this FAQ. ' +
+      '(2) This FAQ is a supplement, not the only source — if a topic is not mentioned here, that ' +
+      'does NOT mean it is unanswerable. Check your core system instructions and the other live ' +
+      'content below before ever saying you do not have the information.\n\n' + faqText + '\n\n';
   }
   if (studentPageText) {
     context += 'LIVE CONTENT FROM vobiblecollege.org/student-page:\n' + studentPageText + '\n\n';
