@@ -725,13 +725,25 @@
     }, 2500);
   }, 3500);
 
+  // Tell the parent page (when embedded via the WordPress iframe loader) to resize the
+  // iframe to fit the open chat window, and shrink it back down when closed — otherwise
+  // an always-full-size iframe would block clicks on the page behind it even when closed.
+  function notifyParentSize(isOpen) {
+    if (window.parent === window) return;
+    window.parent.postMessage({ vobcWidget: true, open: isOpen }, '*');
+  }
+
   function openChat() {
     autoOpenFired = true;
     win.classList.add('open');
     tooltip.classList.remove('show');
     textarea.focus();
+    notifyParentSize(true);
   }
-  function closeChat() { win.classList.remove('open'); }
+  function closeChat() {
+    win.classList.remove('open');
+    notifyParentSize(false);
+  }
 
   bubble.addEventListener('click', function () {
     if (win.classList.contains('open')) { closeChat(); }
