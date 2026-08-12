@@ -73,10 +73,11 @@ async function getStudentPageText() {
   var now = Date.now();
   if (_pageCache.text && (now - _pageCache.ts) < CACHE_TTL_MS) return _pageCache.text;
   var text = await fetchWithTimeout(STUDENT_PAGE_URL);
-  // The full page runs ~15k chars; the old 3000-char cap was cutting it off before reaching
-  // several of its links (e.g. the minister's-license document), silently hiding them from
-  // the model. 18000 comfortably covers the whole page with room for future growth.
-  if (text) _pageCache = { text: text.slice(0, 18000), ts: now };
+  // 18000 (the full page) blew Groq's 6000 tokens-per-minute limit on this model, breaking
+  // every single message with a 413. 5000 is a deliberate compromise: comfortably covers the
+  // known links (the minister's-license link sits around char 4100-4700) while leaving real
+  // headroom in the total request size alongside the FAQ, search results, and static prompt.
+  if (text) _pageCache = { text: text.slice(0, 5000), ts: now };
   return _pageCache.text;
 }
 
@@ -111,7 +112,7 @@ function extractResultLinks(html) {
   return results;
 }
 
-var MAX_SEARCH_PAGES = 4;
+var MAX_SEARCH_PAGES = 2; // was 4 -- reduced along with the per-page cap below to fit Groq's token budget
 
 // Runs the visitor's question through the site's own search, then fetches the FULL text of
 // every distinct matching page (in parallel, not one-by-one) — not just the short excerpt
@@ -135,7 +136,7 @@ async function getSearchMatchedPages(question) {
   var topUrls = candidateUrls.slice(0, MAX_SEARCH_PAGES);
   var fetched = await Promise.all(topUrls.map(async function (url) {
     var text = await fetchWithTimeout(url);
-    return text ? { url: url, text: text.slice(0, 2000) } : null;
+    return text ? { url: url, text: text.slice(0, 800) } : null;
   }));
 
   return { snippet: snippet, pages: fetched.filter(Boolean) };
@@ -201,7 +202,7 @@ async function getFaqText() {
     pairs.push('Q: ' + question + '\nA: ' + answer);
   }
   var text = pairs.join('\n\n');
-  if (text) _faqCache = { text: text.slice(0, 8000), ts: now };
+  if (text) _faqCache = { text: text.slice(0, 2500), ts: now }; // was 8000 -- see token-budget note on getStudentPageText
   return _faqCache.text;
 }
 
@@ -276,15 +277,22 @@ exports.handler = async (event) => {
         var note = '\n\nLIVE WEBSITE CONTEXT (fetched just now from vobiblecollege.org). ' +
           'If the answer to the visitor\'s question appears anywhere in this section, use it — ' +
           'do not say you don\'t have the information if it is covered here. Links appear as ' +
-          '"link text [URL]". HARD RULE, no exceptions: whenever your answer refers to a specific ' +
-          'page, form, document, or resource — including things you found here AND things described ' +
-          'only by name in your core instructions above (course schedules, transcript requests, the ' +
-          'minister\'s license document, etc.) — you must include a real clickable [URL] for it in ' +
-          'your reply. Search this section for the exact URL first. Never write phrases like "on the ' +
-          'student page," "visit vobiblecollege.org," or "check the website" without an actual URL ' +
-          'attached to them — that is treated as a wrong answer. If you truly cannot find a more ' +
-          'specific URL anywhere in this context, default to https://vobiblecollege.org/student-page ' +
-          'rather than describing the location in words only:\n\n' + liveContext;
+          '"link text [URL]".\n\n' +
+          'ANTI-FABRICATION RULES — these override everything else, including any earlier ' +
+          'instruction to always include a link:\n' +
+          '1. NEVER invent, guess, construct, or modify a URL. Only ever use a URL that appears ' +
+          'character-for-character in this context or in your core instructions above. If you do not ' +
+          'have a real URL for something, either mention it with no link at all, or point to ' +
+          'https://vobiblecollege.org/student-page ONLY if that is genuinely relevant — never produce ' +
+          'a URL you are not certain is real.\n' +
+          '2. NEVER state that a feature, service, form, or option exists (e.g. "you can check your ' +
+          'scholarship status online," "you can track your application") unless it is explicitly ' +
+          'described in your core instructions or in this live context. If you are unsure whether ' +
+          'something exists, say you do not have that information instead of guessing or assuming it ' +
+          'probably exists.\n' +
+          '3. When you DO have a specific page or resource from your core instructions or this live ' +
+          'context, include its real URL so the visitor can click straight to it — but a correct ' +
+          'answer with no link is always better than a wrong answer with an invented one:\n\n' + liveContext;
         if (sysIndex !== -1) {
           messages[sysIndex] = { role: 'system', content: messages[sysIndex].content + note };
         } else {
