@@ -8,14 +8,30 @@
 //  5. Click Deploy and copy the Web App URL
 //  6. Paste that URL into vobc-chatbot.html as the WEBHOOK_URL value
 //
-// This script creates two sheets in the active spreadsheet:
+// This script creates two sheets in its own spreadsheet (auto-created on first run,
+// named "VOBC Chatbot Data" — no need to create or bind one yourself):
 //  • Leads        — name, email, phone, page, last question, language, timestamp
 //  • Conversations — question, answer, page, language, timestamp
 // ─────────────────────────────────────────────────────────────────────────────
 
+// Standalone Apps Script projects (created from script.google.com directly, not from
+// Extensions > Apps Script inside an existing Sheet) have no "active spreadsheet" --
+// SpreadsheetApp.getActiveSpreadsheet() returns null for them. This creates one on the
+// first real request and remembers its ID (via PropertiesService) for every call after.
+function getOrCreateSpreadsheet() {
+  var props = PropertiesService.getScriptProperties();
+  var id = props.getProperty('SPREADSHEET_ID');
+  if (id) {
+    try { return SpreadsheetApp.openById(id); } catch (e) { /* fall through and recreate */ }
+  }
+  var ss = SpreadsheetApp.create('VOBC Chatbot Data');
+  props.setProperty('SPREADSHEET_ID', ss.getId());
+  return ss;
+}
+
 function doPost(e) {
   try {
-    var ss   = SpreadsheetApp.getActiveSpreadsheet();
+    var ss   = getOrCreateSpreadsheet();
     var data = JSON.parse(e.postData.contents);
 
     if (data.type === 'lead') {
