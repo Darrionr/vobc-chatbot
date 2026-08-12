@@ -271,16 +271,26 @@ async function urlReallyExists(url) {
 // Checks every URL the model actually put in its reply and removes any that don't
 // really resolve, so a fabricated link can never reach a visitor even if the model
 // ignored the anti-fabrication instructions in the prompt.
+// "link text [URL]" is an internal notation used to preserve link destinations when
+// live-fetched page content gets handed to the model — the model sometimes echoes it
+// verbatim into its reply instead of paraphrasing it away, leaving visible "[...]"
+// clutter (and it also confuses the front end's own link auto-detection). Strip the
+// brackets down to a bare URL before anything else runs.
+function unwrapBracketedUrls(text) {
+  return text.replace(/\[(https?:\/\/[^\]\s]+)\]/g, '$1');
+}
+
 async function stripFabricatedLinks(replyText) {
-  var urls = extractUrls(replyText);
-  if (urls.length === 0) return replyText;
+  var text = unwrapBracketedUrls(replyText);
+  var urls = extractUrls(text);
+  if (urls.length === 0) return text;
 
   var unique = urls.filter(function (u, i) { return urls.indexOf(u) === i; });
   var checks = await Promise.all(unique.map(async function (u) {
     return { url: u, ok: await urlReallyExists(u) };
   }));
 
-  var result = replyText;
+  var result = text;
   checks.forEach(function (c) {
     if (!c.ok) {
       var escaped = c.url.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -328,8 +338,10 @@ exports.handler = async (event) => {
       if (liveContext) {
         liveNote = '\n\nLIVE WEBSITE CONTEXT (fetched just now from vobiblecollege.org). ' +
           'If the answer to the visitor\'s question appears anywhere in this section, use it — ' +
-          'do not say you don\'t have the information if it is covered here. Links appear as ' +
-          '"link text [URL]".\n\n' +
+          'do not say you don\'t have the information if it is covered here. Links appear here as ' +
+          '"link text [URL]" — that square-bracket notation is only for you to read; when you cite ' +
+          'a URL in your reply, write it as a plain bare URL with no brackets around it ' +
+          '(https://example.com, never [https://example.com]).\n\n' +
           'ANTI-FABRICATION RULES — these override everything else, including any earlier ' +
           'instruction to always include a link:\n' +
           '1. NEVER invent, guess, construct, or modify a URL. Only ever use a URL that appears ' +

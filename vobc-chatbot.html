@@ -794,8 +794,17 @@
       .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
   }
   function linkify(escapedText) {
-    return escapedText.replace(/(https?:\/\/[^\s<]+)/g, function(url) {
-      return '<a href="' + url + '" target="_blank" rel="noopener noreferrer">' + url + '</a>';
+    // Strip literal "[URL]" bracket wrapping first -- that notation is an internal format
+    // used to preserve link destinations when the backend feeds the model live page
+    // content; the model sometimes echoes it verbatim instead of paraphrasing it away.
+    var text = escapedText.replace(/\[(https?:\/\/[^\]\s]+)\]/g, '$1');
+    // Exclude closing brackets/parens/quotes from the match itself (not just trailing
+    // punctuation) so a URL followed immediately by "]" or ")" — as bracket-notation or a
+    // parenthetical often produces — never gets swallowed into the href and broken.
+    return text.replace(/(https?:\/\/[^\s\)\]}"'<]+)/g, function(url) {
+      var trimmed = url.replace(/[.,;:!?]+$/, '');
+      var trailing = url.slice(trimmed.length);
+      return '<a href="' + trimmed + '" target="_blank" rel="noopener noreferrer">' + trimmed + '</a>' + trailing;
     });
   }
   function appendBot(text) {
