@@ -73,7 +73,10 @@ async function getStudentPageText() {
   var now = Date.now();
   if (_pageCache.text && (now - _pageCache.ts) < CACHE_TTL_MS) return _pageCache.text;
   var text = await fetchWithTimeout(STUDENT_PAGE_URL);
-  if (text) _pageCache = { text: text.slice(0, 3000), ts: now };
+  // The full page runs ~15k chars; the old 3000-char cap was cutting it off before reaching
+  // several of its links (e.g. the minister's-license document), silently hiding them from
+  // the model. 18000 comfortably covers the whole page with room for future growth.
+  if (text) _pageCache = { text: text.slice(0, 18000), ts: now };
   return _pageCache.text;
 }
 
