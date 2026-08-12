@@ -9,10 +9,13 @@
 const GROQ_URL = 'https://api.groq.com/openai/v1/chat/completions';
 const STUDENT_PAGE_URL = 'https://vobiblecollege.org/student-page/';
 const SITE_SEARCH_URL = 'https://vobiblecollege.org/?s=';
+const FAQ_SHEET_ID = '1Nl3VQflf2uSgBOX6csGbhw8_BTzYh48V5PxnDCNMvhQ';
+const FAQ_CSV_URL = 'https://docs.google.com/spreadsheets/d/' + FAQ_SHEET_ID + '/export?format=csv';
 const FETCH_TIMEOUT_MS = 4000;
 const CACHE_TTL_MS = 30 * 60 * 1000; // 30 minutes
 
 var _pageCache = { text: '', ts: 0 };
+var _faqCache  = { text: '', ts: 0 };
 
 function resolveUrl(href) {
   if (/^https?:\/\//i.test(href)) return href;
@@ -44,7 +47,7 @@ function stripHtml(html) {
     .trim();
 }
 
-async function fetchWithTimeout(url) {
+async function rawFetchWithTimeout(url) {
   var controller = new AbortController();
   var timer = setTimeout(function () { controller.abort(); }, FETCH_TIMEOUT_MS);
   try {
@@ -53,13 +56,17 @@ async function fetchWithTimeout(url) {
       headers: { 'User-Agent': 'VOBC-Chatbot/1.0 (+https://vobiblecollege.org)' }
     });
     if (!res.ok) return '';
-    var html = await res.text();
-    return stripHtml(html);
+    return await res.text();
   } catch (e) {
     return '';
   } finally {
     clearTimeout(timer);
   }
+}
+
+async function fetchWithTimeout(url) {
+  var raw = await rawFetchWithTimeout(url);
+  return raw ? stripHtml(raw) : '';
 }
 
 async function getStudentPageText() {
@@ -70,15 +77,72 @@ async function getStudentPageText() {
   return _pageCache.text;
 }
 
+// Minimal RFC 4180 CSV parser — handles quoted fields containing commas,
+// newlines, and escaped ("") quotes, which the FAQ sheet's answer column has.
+function parseCsv(text) {
+  var rows = [];
+  var row = [];
+  var field = '';
+  var inQuotes = false;
+  for (var i = 0; i < text.length; i++) {
+    var c = text[i];
+    if (inQuotes) {
+      if (c === '"') {
+        if (text[i + 1] === '"') { field += '"'; i++; }
+        else { inQuotes = false; }
+      } else {
+        field += c;
+      }
+    } else if (c === '"') {
+      inQuotes = true;
+    } else if (c === ',') {
+      row.push(field); field = '';
+    } else if (c === '\r') {
+      // skip
+    } else if (c === '\n') {
+      row.push(field); field = '';
+      rows.push(row); row = [];
+    } else {
+      field += c;
+    }
+  }
+  if (field.length > 0 || row.length > 0) { row.push(field); rows.push(row); }
+  return rows;
+}
+
+async function getFaqText() {
+  var now = Date.now();
+  if (_faqCache.text && (now - _faqCache.ts) < CACHE_TTL_MS) return _faqCache.text;
+  var csv = await rawFetchWithTimeout(FAQ_CSV_URL);
+  if (!csv) return _faqCache.text; // keep last known-good copy rather than dropping it on a transient failure
+  var rows = parseCsv(csv);
+  var pairs = [];
+  // Row 0 is the header (blank, Question, Answer, Comments) — columns 1 and 2 are Question/Answer.
+  for (var r = 1; r < rows.length; r++) {
+    var question = (rows[r][1] || '').replace(/\s+/g, ' ').trim();
+    var answer   = (rows[r][2] || '').replace(/\s+/g, ' ').trim();
+    if (question && answer) pairs.push('Q: ' + question + '\nA: ' + answer);
+  }
+  var text = pairs.join('\n\n');
+  if (text) _faqCache = { text: text.slice(0, 8000), ts: now };
+  return _faqCache.text;
+}
+
 async function getLiveWebsiteContext(question) {
   var results = await Promise.all([
+    getFaqText(),
     getStudentPageText(),
     fetchWithTimeout(SITE_SEARCH_URL + encodeURIComponent(question))
   ]);
-  var studentPageText = results[0];
-  var searchText = results[1].slice(0, 2500);
+  var faqText        = results[0];
+  var studentPageText = results[1];
+  var searchText      = results[2].slice(0, 2500);
 
   var context = '';
+  if (faqText) {
+    context += 'OFFICIAL VOBC FAQ (staff-maintained — treat as the most authoritative source, ' +
+      'overriding other context below if they conflict):\n' + faqText + '\n\n';
+  }
   if (studentPageText) {
     context += 'LIVE CONTENT FROM vobiblecollege.org/student-page:\n' + studentPageText + '\n\n';
   }
