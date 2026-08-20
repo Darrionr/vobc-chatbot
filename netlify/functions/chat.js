@@ -372,7 +372,9 @@ exports.handler = async (event) => {
     };
   }
 
-  var model = payload.model || 'llama-3.1-8b-instant';
+  var PRIMARY_MODEL  = 'openai/gpt-oss-120b';
+  var FALLBACK_MODEL = 'openai/gpt-oss-20b'; // used only if the primary model itself becomes unavailable
+  var model = payload.model || PRIMARY_MODEL;
   var maxTokens = payload.max_tokens || 600;
 
   function buildMessages(includeLive, historyLimit) {
@@ -381,12 +383,23 @@ exports.handler = async (event) => {
     return [{ role: 'system', content: sysContent }].concat(hist);
   }
 
-  // Self-healing against size/rate-limit errors (the model's TPM budget is tight enough
-  // that a long back-and-forth conversation, or a question that pulls in a lot of live
-  // context, can occasionally still exceed it). Rather than surface "having trouble
-  // connecting" to a visitor, automatically retry with progressively less context — full
-  // live context is nice-to-have, but the core knowledge base and the visitor's actual
-  // question are what must never get dropped.
+  // A model provider can retire a model with little or no notice (this happened for real:
+  // the model this chatbot originally shipped with, llama-3.1-8b-instant, was silently
+  // decommissioned by Groq). A request-size problem and a model-no-longer-exists problem
+  // need different fixes, so detect which one happened and respond accordingly rather than
+  // blindly retrying the same broken thing.
+  function isModelUnavailableError(errData) {
+    var msg  = (errData && errData.error && errData.error.message) || '';
+    var code = (errData && errData.error && errData.error.code) || '';
+    return code === 'model_not_found' || code === 'model_decommissioned' ||
+      /decommission|does not exist|no longer supported/i.test(msg);
+  }
+
+  // Self-healing: rather than surface "having trouble connecting" to a visitor, automatically
+  // retry with progressively less context for size/rate-limit errors, OR switch to the
+  // fallback model if the primary one itself turns out to be unavailable — full live context
+  // and the primary model are nice-to-have, but the core knowledge base and the visitor's
+  // actual question are what must never get dropped.
   var attemptPlans = [
     { includeLive: true,  historyLimit: null },
     { includeLive: true,  historyLimit: 6 },
@@ -394,6 +407,7 @@ exports.handler = async (event) => {
     { includeLive: false, historyLimit: 1 }
   ];
 
+  var currentModel = model;
   var response, data;
   for (var p = 0; p < attemptPlans.length; p++) {
     var plan = attemptPlans[p];
@@ -404,13 +418,16 @@ exports.handler = async (event) => {
         'Authorization': 'Bearer ' + API_KEY
       },
       body: JSON.stringify({
-        model: model,
+        model: currentModel,
         max_tokens: maxTokens,
         messages: buildMessages(plan.includeLive, plan.historyLimit)
       })
     });
     if (response.ok) { data = await response.json(); break; }
     data = await response.json().catch(function () { return null; });
+    if (isModelUnavailableError(data) && currentModel !== FALLBACK_MODEL) {
+      currentModel = FALLBACK_MODEL;
+    }
   }
 
   // Instructions alone aren't reliable enough to stop this small/fast model from

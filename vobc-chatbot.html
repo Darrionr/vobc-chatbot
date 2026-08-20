@@ -337,7 +337,7 @@
   // The Groq API key lives server-side now (Netlify env var GROQ_API_KEY), read by
   // netlify/functions/chat.js. Nothing secret is shipped to the browser anymore.
   var CHAT_ENDPOINT = '/.netlify/functions/chat';
-  var MODEL      = 'llama-3.1-8b-instant';
+  var MODEL      = 'openai/gpt-oss-120b';
   var MAX_TOKENS = 600;
 
   // Paste your deployed Google Apps Script Web App URL here
